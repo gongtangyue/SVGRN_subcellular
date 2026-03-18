@@ -44,7 +44,6 @@ class SC_GRN_model:
             feature_dir=self.subcellular_feature_dir,
             cell_ids=All_Data.index,
             gene_names=gene_name,
-            opt=self.opt,
         )
         print(
             f"Precomputed subcellular features loaded from {loaded_feature_dir}. "

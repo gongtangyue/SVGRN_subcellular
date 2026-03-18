@@ -44,19 +44,6 @@ def make_subcellular_feature_config(
         "subcell_splat_radius": int(subcell_splat_radius),
         "subcell_grid_norm": str(subcell_grid_norm),
     }
-
-
-def build_subcellular_feature_config_from_opt(opt):
-    return make_subcellular_feature_config(
-        subcell_sigma=getattr(opt, "subcell_sigma", 0.03),
-        subcell_grid_size=getattr(opt, "subcell_grid_size", 16),
-        subcell_r_cell=getattr(opt, "subcell_r_cell", 0.05),
-        subcell_splat_sigma=getattr(opt, "subcell_splat_sigma", 1.0),
-        subcell_splat_radius=getattr(opt, "subcell_splat_radius", 1),
-        subcell_grid_norm=getattr(opt, "subcell_grid_norm", "log1p"),
-    )
-
-
 def save_subcellular_feature_artifacts(
     output_dir,
     cell_ids,
@@ -101,35 +88,9 @@ def _build_indexer(stored_values, requested_values, value_name):
             f"Precomputed subcellular features are missing {value_name}(s): {preview}"
         )
     return np.asarray(indexer, dtype=np.int64)
-
-
-def _validate_feature_config(feature_dir, saved_config, opt):
-    expected_config = build_subcellular_feature_config_from_opt(opt)
-    mismatches = []
-    for key, expected in expected_config.items():
-        actual = saved_config.get(key)
-        if actual is None:
-            mismatches.append(f"{key}: missing in saved config")
-            continue
-        if isinstance(expected, float):
-            if not np.isclose(float(actual), expected, atol=1e-8):
-                mismatches.append(f"{key}: saved={actual}, current={expected}")
-        elif actual != expected:
-            mismatches.append(f"{key}: saved={actual}, current={expected}")
-
-    if mismatches:
-        mismatch_text = "; ".join(mismatches)
-        raise ValueError(
-            f"Precomputed subcellular features in {feature_dir} do not match current "
-            f"arguments. {mismatch_text}. Re-run the generator script for this dataset."
-        )
-
-
-def load_precomputed_subcellular_features(feature_dir, cell_ids, gene_names, opt):
+def load_precomputed_subcellular_features(feature_dir, cell_ids, gene_names):
     feature_dir = Path(feature_dir).expanduser().resolve()
-    config_path = _load_required_file(feature_dir / CONFIG_FILE)
-    saved_config = json.loads(config_path.read_text(encoding="utf-8"))
-    _validate_feature_config(feature_dir, saved_config, opt)
+    _load_required_file(feature_dir / CONFIG_FILE)
 
     stored_cell_ids = np.load(_load_required_file(feature_dir / CELL_IDS_FILE), allow_pickle=False)
     stored_gene_names = np.load(_load_required_file(feature_dir / GENE_NAMES_FILE), allow_pickle=False)

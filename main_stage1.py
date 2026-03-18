@@ -43,42 +43,6 @@ def build_parser():
         help="Directory containing precomputed subcellular feature files.",
     )
     parser.add_argument(
-        "--subcell_sigma",
-        type=float,
-        default=0.03,
-        help="Gaussian sigma used for transcript colocalization weights.",
-    )
-    parser.add_argument(
-        "--subcell_grid_size",
-        type=int,
-        default=16,
-        help="Grid size for subcellular transcript splatting.",
-    )
-    parser.add_argument(
-        "--subcell_r_cell",
-        type=float,
-        default=0.05,
-        help="Cell radius used to normalize transcript coordinates into local grid space.",
-    )
-    parser.add_argument(
-        "--subcell_splat_sigma",
-        type=float,
-        default=1.0,
-        help="Gaussian sigma for transcript splatting in grid-cell units.",
-    )
-    parser.add_argument(
-        "--subcell_splat_radius",
-        type=int,
-        default=1,
-        help="Neighborhood radius for Gaussian splatting.",
-    )
-    parser.add_argument(
-        "--subcell_grid_norm",
-        type=str,
-        default="log1p",
-        help="Normalization mode for the gene grid: log1p, per_gene_sum, or none.",
-    )
-    parser.add_argument(
         "--subcell_gene_pool_channels",
         type=int,
         default=16,
@@ -138,7 +102,7 @@ def run():
         opt.gamma = 0.95
         opt.lr = 1e-4
         opt.lr_step_size = 0.99
-        opt.batch_size = 64
+        opt.batch_size = 128
 
     opt.subcellular_feature_dir = opt.subcellular_feature_dir or os.path.join(
         os.path.dirname(os.path.abspath(opt.data_file)),
