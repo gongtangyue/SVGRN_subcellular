@@ -1,6 +1,5 @@
 import os
 import sys
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -12,125 +11,23 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import TensorDataset
 
 from src.Con_Model_newED import CVAE_EAD_newED
-from src.subcellular_colocalization import compute_gaussian_colocalization
-from src.subcellular_grid import build_gene_grid_from_subcellular_csv, normalize_gene_grid
+from src.subcellular_feature_store import (
+    load_precomputed_subcellular_features,
+    min_max_scale,
+)
 from src.utils import evaluate, extractEdgesFromMatrix
 
 class non_celltype_GRN_model:
-    SUBCELLULAR_DATA_DIR = (
-        Path(__file__).resolve().parents[1]
-        / "in_sim"
-        / "g110_c2k_n01"
-        / "subcellular_data"
-    )
-
     def __init__(self, opt):
         self.opt = opt
         os.makedirs(opt.save_name, exist_ok=True)
-        self.subcellular_data_dir = self._resolve_subcellular_data_dir()
-
-    def _resolve_subcellular_data_dir(self):
-        user_dir_raw = getattr(self.opt, "subcellular_data_dir", "")
-        if user_dir_raw and str(user_dir_raw).strip():
-            return Path(user_dir_raw).expanduser()
-
-        if getattr(self.opt, "data_file", None):
-            data_file_dir = Path(self.opt.data_file).resolve().parent
-            inferred = data_file_dir / "subcellular_data"
-            if inferred.exists():
-                return inferred
-
-        return self.SUBCELLULAR_DATA_DIR
+        self.subcellular_feature_dir = opt.subcellular_feature_dir
 
     def initalize_A_withTF(self, TF_mask):
         A = TF_mask.copy()
         for i in range(len(A)):
             A[i, i] = 0
         return A
-
-    @staticmethod
-    def _min_max_scale(df):
-        if isinstance(df, pd.DataFrame):
-            denom = df.max(0) - df.min(0)
-            denom = denom.replace(0, 1)
-            return (df - df.min(0)) / denom
-
-        arr = np.asarray(df, dtype=np.float32)
-        if arr.size == 0:
-            return arr
-        min_vals = arr.min(axis=0, keepdims=True)
-        denom = arr.max(axis=0, keepdims=True) - min_vals
-        denom[denom == 0] = 1
-        return (arr - min_vals) / denom
-
-    def _load_subcellular_grid_features(self, all_data, gene_list):
-        grid_size = int(getattr(self.opt, "subcell_grid_size", 16))
-        r_cell = float(getattr(self.opt, "subcell_r_cell", 0.05))
-        splat_sigma = float(getattr(self.opt, "subcell_splat_sigma", 1.0))
-        splat_radius = int(getattr(self.opt, "subcell_splat_radius", 1))
-        norm_mode = getattr(self.opt, "subcell_grid_norm", "log1p")
-        sub_features = []
-        missing_or_empty = 0
-
-        for cell_id, row in all_data.iterrows():
-            csv_path = self.subcellular_data_dir / f"{cell_id}_subcellular.csv"
-            if csv_path.exists():
-                sub_df = pd.read_csv(csv_path)
-            else:
-                sub_df = None
-
-            if sub_df is None or sub_df.empty:
-                missing_or_empty += 1
-                grid = np.zeros((len(gene_list), grid_size, grid_size), dtype=np.float32)
-            else:
-                grid = build_gene_grid_from_subcellular_csv(
-                    sub_df=sub_df,
-                    gene_list=gene_list,
-                    cell_x=row["x"],
-                    cell_y=row["y"],
-                    grid_size=grid_size,
-                    r_cell=r_cell,
-                    splat_sigma=splat_sigma,
-                    radius=splat_radius,
-                )
-                grid = normalize_gene_grid(grid, mode=norm_mode)
-            sub_features.append(grid)
-
-        subcell_array = np.stack(sub_features, axis=0).astype(np.float32, copy=False)
-
-        print(
-            f"Subcellular features loaded from {self.subcellular_data_dir}. "
-            f"shape={subcell_array.shape}, grid_size={grid_size}, "
-            f"r_cell={r_cell}, splat_sigma={splat_sigma}, radius={splat_radius}, "
-            f"norm={norm_mode}, missing/empty files: {missing_or_empty}/{len(sub_features)}"
-        )
-        return subcell_array
-
-    def _load_subcellular_colocalization_features(self, cell_ids, gene_list):
-        sigma = float(getattr(self.opt, "subcell_sigma", 0.03))
-        feature_dim = len(gene_list) * len(gene_list)
-        sub_features = []
-        missing_or_empty = 0
-
-        for cell_id in cell_ids:
-            csv_path = self.subcellular_data_dir / f"{cell_id}_subcellular.csv"
-            if csv_path.exists():
-                sub_df = pd.read_csv(csv_path)
-                colocalization = compute_gaussian_colocalization(sub_df, gene_list, sigma)
-                if np.any(colocalization):
-                    sub_features.append(colocalization)
-                    continue
-            missing_or_empty += 1
-            sub_features.append(np.zeros((len(gene_list), len(gene_list)), dtype=np.float32))
-
-        subcell_coloc_array = np.stack(sub_features, axis=0).reshape(len(cell_ids), feature_dim)
-        subcell_coloc_array = self._min_max_scale(subcell_coloc_array)
-        print(
-            f"Subcellular colocalization loaded from {self.subcellular_data_dir}. "
-            f"shape={subcell_coloc_array.shape}, sigma={sigma}, "
-            f"missing/empty files: {missing_or_empty}/{len(cell_ids)}"
-        )
-        return subcell_coloc_array
 
     def init_data(self):
 
@@ -142,9 +39,17 @@ class non_celltype_GRN_model:
         data.columns = data.columns.astype(str)
         All_gene = list(data.columns)     # gene column names are all string
         gene_name = All_gene
-        subcell_coloc_array = self._load_subcellular_colocalization_features(All_Data.index, All_gene)
-        subcell_array = self._load_subcellular_grid_features(All_Data, All_gene)
-        pos_df = self._min_max_scale(pos_df)
+        subcell_coloc_array, subcell_array, loaded_feature_dir = load_precomputed_subcellular_features(
+            feature_dir=self.subcellular_feature_dir,
+            cell_ids=All_Data.index,
+            gene_names=All_gene,
+            opt=self.opt,
+        )
+        print(
+            f"Precomputed subcellular features loaded from {loaded_feature_dir}. "
+            f"coloc_shape={subcell_coloc_array.shape}, grid_shape={subcell_array.shape}"
+        )
+        pos_df = min_max_scale(pos_df)
 
         # load TF list from a file or other sources
         with open(self.opt.tf_list, "r") as f:

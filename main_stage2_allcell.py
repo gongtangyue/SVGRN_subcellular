@@ -47,6 +47,12 @@ def build_parser():
         help='Directory containing per-cell subcellular CSV files.',
     )
     parser.add_argument(
+        '--subcellular_feature_dir',
+        type=str,
+        default='',
+        help='Directory containing precomputed subcellular feature files.',
+    )
+    parser.add_argument(
         '--subcell_sigma',
         type=float,
         default=0.03,
@@ -152,7 +158,12 @@ def run():
         opt.n_hidden = 128
         opt.gamma = 0.95
         opt.lr_step_size = 0.99
-        opt.batch_size = 512
+        opt.batch_size = 128
+
+    opt.subcellular_feature_dir = opt.subcellular_feature_dir or os.path.join(
+        os.path.dirname(os.path.abspath(opt.data_file)),
+        "subcellular_features",
+    )
 
     if opt.resume_run_dir:
         opt.save_path = opt.resume_run_dir

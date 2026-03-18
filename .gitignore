@@ -11,6 +11,9 @@ runs/
 logs/
 outputs/
 
+#data files
+in_sim/
+
 # Model checkpoints
 *.pt
 *.pth

@@ -37,6 +37,12 @@ def build_parser():
         help="Directory containing per-cell subcellular CSV files.",
     )
     parser.add_argument(
+        "--subcellular_feature_dir",
+        type=str,
+        default="",
+        help="Directory containing precomputed subcellular feature files.",
+    )
+    parser.add_argument(
         "--subcell_sigma",
         type=float,
         default=0.03,
@@ -133,6 +139,11 @@ def run():
         opt.lr = 1e-4
         opt.lr_step_size = 0.99
         opt.batch_size = 64
+
+    opt.subcellular_feature_dir = opt.subcellular_feature_dir or os.path.join(
+        os.path.dirname(os.path.abspath(opt.data_file)),
+        "subcellular_features",
+    )
 
     # Create a timestamped run directory for this training job.
     run_tag = datetime.now().strftime("%Y%m%d_%H%M%S")
