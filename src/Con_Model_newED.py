@@ -274,12 +274,12 @@ class Encoder_Yprime_Net(nn.Module):
 
 
 class CVAE_EAD_newED(nn.Module):
-    def __init__(self, adj_A, x_dim, z_dim, y_dim, y_pos_dim, y_prime_input_dim=2):
+    def __init__(self, adj_A, x_dim, z_dim, y_dim, y_pos_dim, y_prime_dim, y_prime_input_dim=2):
         super(CVAE_EAD_newED, self).__init__()
         # adj_A_init, x_dim = 1, z_dim=opt.n_hidden=128, opt.K=1
         self.y_pos_dim = y_pos_dim    # dim of the y encoded feature
         self.y_prime_input_dim = y_prime_input_dim
-        self.y_prime_dim = 64
+        self.y_prime_dim = y_prime_dim
         self.adj_A = nn.Parameter(Variable(torch.from_numpy(adj_A).double(), requires_grad=True, name='adj_A'))
         self.n_gene = n_gene = len(adj_A)
         nonLinear = nn.Tanh()

@@ -209,7 +209,7 @@ class SC_GRN_model:
             truth_edges = [(int(Ground_Truth.columns[col])-1, int(Ground_Truth.index[row])-1) for row, col in zip(*nonzero_indices)]
             truth_edges = set(truth_edges)   # idx_send, idx_rec
 
-        return dataloader, num_nodes, num_genes, data, truth_edges, TF_mask, gene_name
+        return dataloader, num_nodes, num_genes, data, truth_edges, TF_mask, gene_name, subcell_train.shape[1]
 
     def train_model(self):
         opt = self.opt
@@ -220,12 +220,26 @@ class SC_GRN_model:
         print(opt.device)
         print("Using GPU....." if use_gpu else "Not using GPU....")
         
-        dataloader, num_nodes, num_genes, data, truth_edges, TFmask2, gene_name = self.init_data()
+        dataloader, num_nodes, num_genes, data, truth_edges, TFmask2, gene_name, y_prime_input_dim = self.init_data()
         
         # y_pos_dim = 128
         # PyTorch 2.6 defaults torch.load(weights_only=True), but stage1 saves a full model object.
         cvae = torch.load(opt.model_file, map_location=opt.device, weights_only=False).to(opt.device)    # load stage1 model
         print("model loaded")
+        model_y_prime_input_dim = int(
+            getattr(
+                cvae,
+                "y_prime_input_dim",
+                cvae.encoder_Yprime.y_prime_encoder[0].in_features,
+            )
+        )
+        if model_y_prime_input_dim != y_prime_input_dim:
+            raise ValueError(
+                "Stage2 subcellular feature dim does not match the loaded stage1 model: "
+                f"stage2 got {y_prime_input_dim}, but stage1 expects {model_y_prime_input_dim}. "
+                "Please use a stage1.pt trained with the same colocalization encoding and gene set."
+            )
+        print(f"Stage2 Y_prime dim matches loaded stage1 model: {model_y_prime_input_dim}")
 
         optimizer2 = optim.RMSprop([cvae.adj_A], lr=opt.lr * 0.2) # only update
         scheduler = torch.optim.lr_scheduler.StepLR(optimizer2, step_size=opt.lr_step_size, gamma=opt.gamma)

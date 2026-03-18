@@ -194,7 +194,8 @@ class non_celltype_GRN_model:
         dataloader, num_nodes, num_genes, data, truth_edges, TFmask2, gene_name, y_prime_input_dim = self.init_data()
         adj_A_init = self.initalize_A_withTF(TFmask2)
 
-        y_pos_dim = 128
+        y_pos_dim = 64
+        y_prime_dim = 128
 
         cvae = CVAE_EAD_newED(
             adj_A_init,
@@ -202,6 +203,7 @@ class non_celltype_GRN_model:
             opt.n_hidden,
             opt.K,
             y_pos_dim,
+            y_prime_dim = y_prime_dim,
             y_prime_input_dim=y_prime_input_dim,
         ).float().to(opt.device)
 
