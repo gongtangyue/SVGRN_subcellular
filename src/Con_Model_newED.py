@@ -273,18 +273,71 @@ class Encoder_Yprime_Net(nn.Module):
         return y_prime
 
 
+class Encoder_Yprime_GridNet(nn.Module):
+    def __init__(
+        self,
+        n_gene,
+        gene_pool_channels=16,
+        cnn_hidden=32,
+        y_prime_dim=64,
+    ):
+        super().__init__()
+        self.gene_pool = nn.Conv2d(n_gene, gene_pool_channels, kernel_size=1, stride=1, padding=0)
+        self.net = nn.Sequential(
+            self.gene_pool,
+            nn.ReLU(inplace=True),
+            nn.Conv2d(gene_pool_channels, cnn_hidden, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(cnn_hidden, cnn_hidden, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.proj = nn.Linear(cnn_hidden, y_prime_dim)
+
+    def forward(self, y_prime_grid):
+        feat = self.net(y_prime_grid)
+        feat = feat.flatten(1)
+        return self.proj(feat)
+
+
 class CVAE_EAD_newED(nn.Module):
-    def __init__(self, adj_A, x_dim, z_dim, y_dim, y_pos_dim, y_prime_dim, y_prime_input_dim=2):
+    def __init__(
+        self,
+        adj_A,
+        x_dim,
+        z_dim,
+        y_dim,
+        y_pos_dim,
+        y_prime_coloc_dim,
+        y_prime_grid_dim,
+        y_prime_coloc_input_dim=2,
+        y_prime_grid_shape=None,
+        gene_pool_channels=16,
+        cnn_hidden=32,
+    ):
         super(CVAE_EAD_newED, self).__init__()
         # adj_A_init, x_dim = 1, z_dim=opt.n_hidden=128, opt.K=1
         self.y_pos_dim = y_pos_dim    # dim of the y encoded feature
-        self.y_prime_input_dim = y_prime_input_dim
-        self.y_prime_dim = y_prime_dim
+        self.y_prime_coloc_input_dim = y_prime_coloc_input_dim
+        self.y_prime_coloc_dim = y_prime_coloc_dim
+        self.y_prime_grid_dim = y_prime_grid_dim
+        self.y_prime_dim = self.y_prime_coloc_dim + self.y_prime_grid_dim
+        self.y_prime_grid_shape = tuple(y_prime_grid_shape) if y_prime_grid_shape is not None else None
         self.adj_A = nn.Parameter(Variable(torch.from_numpy(adj_A).double(), requires_grad=True, name='adj_A'))
         self.n_gene = n_gene = len(adj_A)
         nonLinear = nn.Tanh()
         self.encoder_Y = Encoder_Y_Net(self.y_pos_dim, nonLinear)
-        self.encoder_Yprime = Encoder_Yprime_Net(self.y_prime_input_dim, self.y_prime_dim, nonLinear)
+        self.encoder_Yprime_coloc = Encoder_Yprime_Net(
+            self.y_prime_coloc_input_dim,
+            self.y_prime_coloc_dim,
+            nonLinear,
+        )
+        self.encoder_Yprime_grid = Encoder_Yprime_GridNet(
+            n_gene=n_gene,
+            gene_pool_channels=gene_pool_channels,
+            cnn_hidden=cnn_hidden,
+            y_prime_dim=self.y_prime_grid_dim,
+        )
         self.inference = InferenceNet(x_dim, z_dim, y_dim, y_pos_dim, self.y_prime_dim, n_gene, nonLinear)
         self.generative = GenerativeNet(x_dim, z_dim, y_dim, y_pos_dim, self.y_prime_dim, n_gene, nonLinear)
         self.losses = LossFunctions()
@@ -303,7 +356,7 @@ class CVAE_EAD_newED(nn.Module):
         return adj_normalized
     
 
-    def forward(self, x, Y_pos, Y_prime, loss_weight=None, dropout_mask=None, temperature=1.0, opt=None):
+    def forward(self, x, Y_pos, Y_prime_coloc, Y_prime_grid, loss_weight=None, dropout_mask=None, temperature=1.0, opt=None):
         # x: input, Y_pos: condition (new)
         x_ori = x
         x = x.view(x.size(0), -1, 1)
@@ -320,7 +373,9 @@ class CVAE_EAD_newED(nn.Module):
         adj_A_t_inv = torch.inverse(adj_A_t)        # (I-A^T)^{-1}
 
         Y_pos_feature = self.encoder_Y(Y_pos)
-        Y_prime_feature = self.encoder_Yprime(Y_prime)
+        Y_prime_coloc_feature = self.encoder_Yprime_coloc(Y_prime_coloc)
+        Y_prime_grid_feature = self.encoder_Yprime_grid(Y_prime_grid)
+        Y_prime_feature = torch.cat((Y_prime_coloc_feature, Y_prime_grid_feature), dim=1)
         # print(f"Y_pos_feature size: {Y_pos_feature.size()}")
         out_inf = self.inference(x, Y_pos_feature, Y_prime_feature, adj_A_t, temperature)
 

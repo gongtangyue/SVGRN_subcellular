@@ -52,6 +52,60 @@ def build_parser():
         default=0.03,
         help='Gaussian sigma used for transcript colocalization weights.',
     )
+    parser.add_argument(
+        '--subcell_grid_size',
+        type=int,
+        default=16,
+        help='Grid size for subcellular transcript splatting.',
+    )
+    parser.add_argument(
+        '--subcell_r_cell',
+        type=float,
+        default=0.05,
+        help='Cell radius used to normalize transcript coordinates into local grid space.',
+    )
+    parser.add_argument(
+        '--subcell_splat_sigma',
+        type=float,
+        default=1.0,
+        help='Gaussian sigma for transcript splatting in grid-cell units.',
+    )
+    parser.add_argument(
+        '--subcell_splat_radius',
+        type=int,
+        default=1,
+        help='Neighborhood radius for Gaussian splatting.',
+    )
+    parser.add_argument(
+        '--subcell_grid_norm',
+        type=str,
+        default='log1p',
+        help='Normalization mode for the gene grid: log1p, per_gene_sum, or none.',
+    )
+    parser.add_argument(
+        '--subcell_gene_pool_channels',
+        type=int,
+        default=16,
+        help='Output channels of the 1x1 gene-pooling convolution.',
+    )
+    parser.add_argument(
+        '--subcell_cnn_hidden',
+        type=int,
+        default=32,
+        help='Hidden channels used in the spatial CNN over the subcellular grid.',
+    )
+    parser.add_argument(
+        '--y_prime_coloc_dim',
+        type=int,
+        default=64,
+        help='Output embedding dimension for the colocalization encoder.',
+    )
+    parser.add_argument(
+        '--y_prime_grid_dim',
+        type=int,
+        default=64,
+        help='Output embedding dimension for the subcellular grid encoder.',
+    )
     parser.add_argument('--net_file', type=str, default='',
                         help='The ground truth of GRN. Only used in GRN inference task if available. ')
     parser.add_argument('--net_path', type=str, default=None,

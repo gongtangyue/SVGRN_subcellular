@@ -12,6 +12,8 @@ from torch.utils.data import DataLoader
 from torch.utils.data.dataset import TensorDataset
 
 from src.Con_Model_newED import CVAE_EAD_newED
+from src.subcellular_colocalization import compute_gaussian_colocalization
+from src.subcellular_grid import build_gene_grid_from_subcellular_csv, normalize_gene_grid
 from src.utils import evaluate, extractEdgesFromMatrix
 
 class non_celltype_GRN_model:
@@ -61,71 +63,74 @@ class non_celltype_GRN_model:
         denom[denom == 0] = 1
         return (arr - min_vals) / denom
 
-    @staticmethod
-    def _compute_gaussian_colocalization(sub_df, gene_list, sigma):
-        gene_to_idx = {str(gene): idx for idx, gene in enumerate(gene_list)}
-        n_gene = len(gene_list)
-        colocalization = np.zeros((n_gene, n_gene), dtype=np.float32)
-        required_cols = {"gene", "x", "y"}
-
-        if sigma <= 0 or sub_df.empty or not required_cols.issubset(sub_df.columns):
-            return colocalization
-
-        filtered = sub_df.loc[:, ["gene", "x", "y"]].copy()
-        filtered["gene"] = filtered["gene"].astype(str)
-        filtered = filtered[filtered["gene"].isin(gene_to_idx)]
-        filtered = filtered.dropna(subset=["x", "y"])
-        if filtered.shape[0] < 2:
-            return colocalization
-
-        coords = filtered[["x", "y"]].to_numpy(dtype=np.float32)
-        gene_idx = filtered["gene"].map(gene_to_idx).to_numpy(dtype=np.int64)
-        denom = 2.0 * float(sigma) ** 2
-
-        for i in range(coords.shape[0] - 1):
-            deltas = coords[i + 1:] - coords[i]
-            dist_sq = np.einsum("ij,ij->i", deltas, deltas)
-            weights = np.exp(-dist_sq / denom).astype(np.float32, copy=False)
-            if weights.size == 0:
-                continue
-
-            gi = gene_idx[i]
-            gj = gene_idx[i + 1:]
-            np.add.at(colocalization, (np.full(gj.shape, gi, dtype=np.int64), gj), weights)
-            np.add.at(colocalization, (gj, np.full(gj.shape, gi, dtype=np.int64)), weights)
-
-        total_weight = colocalization.sum()
-        if total_weight > 0:
-            colocalization /= total_weight
-
-        return colocalization
-
-    def _load_subcellular_features(self, cell_ids, gene_list):
+    def _load_subcellular_grid_features(self, all_data, gene_list):
+        grid_size = int(getattr(self.opt, "subcell_grid_size", 16))
+        r_cell = float(getattr(self.opt, "subcell_r_cell", 0.05))
+        splat_sigma = float(getattr(self.opt, "subcell_splat_sigma", 1.0))
+        splat_radius = int(getattr(self.opt, "subcell_splat_radius", 1))
+        norm_mode = getattr(self.opt, "subcell_grid_norm", "log1p")
         sub_features = []
         missing_or_empty = 0
+
+        for cell_id, row in all_data.iterrows():
+            csv_path = self.subcellular_data_dir / f"{cell_id}_subcellular.csv"
+            if csv_path.exists():
+                sub_df = pd.read_csv(csv_path)
+            else:
+                sub_df = None
+
+            if sub_df is None or sub_df.empty:
+                missing_or_empty += 1
+                grid = np.zeros((len(gene_list), grid_size, grid_size), dtype=np.float32)
+            else:
+                grid = build_gene_grid_from_subcellular_csv(
+                    sub_df=sub_df,
+                    gene_list=gene_list,
+                    cell_x=row["x"],
+                    cell_y=row["y"],
+                    grid_size=grid_size,
+                    r_cell=r_cell,
+                    splat_sigma=splat_sigma,
+                    radius=splat_radius,
+                )
+                grid = normalize_gene_grid(grid, mode=norm_mode)
+            sub_features.append(grid)
+
+        subcell_array = np.stack(sub_features, axis=0).astype(np.float32, copy=False)
+
+        print(
+            f"Subcellular features loaded from {self.subcellular_data_dir}. "
+            f"shape={subcell_array.shape}, grid_size={grid_size}, "
+            f"r_cell={r_cell}, splat_sigma={splat_sigma}, radius={splat_radius}, "
+            f"norm={norm_mode}, missing/empty files: {missing_or_empty}/{len(sub_features)}"
+        )
+        return subcell_array
+
+    def _load_subcellular_colocalization_features(self, cell_ids, gene_list):
         sigma = float(getattr(self.opt, "subcell_sigma", 0.03))
         feature_dim = len(gene_list) * len(gene_list)
+        sub_features = []
+        missing_or_empty = 0
 
         for cell_id in cell_ids:
             csv_path = self.subcellular_data_dir / f"{cell_id}_subcellular.csv"
             if csv_path.exists():
                 sub_df = pd.read_csv(csv_path)
-                colocalization = self._compute_gaussian_colocalization(sub_df, gene_list, sigma)
+                colocalization = compute_gaussian_colocalization(sub_df, gene_list, sigma)
                 if np.any(colocalization):
                     sub_features.append(colocalization)
                     continue
             missing_or_empty += 1
             sub_features.append(np.zeros((len(gene_list), len(gene_list)), dtype=np.float32))
 
-        subcell_array = np.stack(sub_features, axis=0).reshape(len(cell_ids), feature_dim)
-        subcell_array = self._min_max_scale(subcell_array)
-
+        subcell_coloc_array = np.stack(sub_features, axis=0).reshape(len(cell_ids), feature_dim)
+        subcell_coloc_array = self._min_max_scale(subcell_coloc_array)
         print(
-            f"Subcellular features loaded from {self.subcellular_data_dir}. "
-            f"sigma={sigma}. per-cell matrix: ({len(gene_list)}, {len(gene_list)}), "
-            f"flattened dim: {feature_dim}. missing/empty files: {missing_or_empty}/{len(cell_ids)}"
+            f"Subcellular colocalization loaded from {self.subcellular_data_dir}. "
+            f"shape={subcell_coloc_array.shape}, sigma={sigma}, "
+            f"missing/empty files: {missing_or_empty}/{len(cell_ids)}"
         )
-        return subcell_array
+        return subcell_coloc_array
 
     def init_data(self):
 
@@ -137,7 +142,8 @@ class non_celltype_GRN_model:
         data.columns = data.columns.astype(str)
         All_gene = list(data.columns)     # gene column names are all string
         gene_name = All_gene
-        subcell_array = self._load_subcellular_features(All_Data.index, All_gene)
+        subcell_coloc_array = self._load_subcellular_colocalization_features(All_Data.index, All_gene)
+        subcell_array = self._load_subcellular_grid_features(All_Data, All_gene)
         pos_df = self._min_max_scale(pos_df)
 
         # load TF list from a file or other sources
@@ -162,11 +168,12 @@ class non_celltype_GRN_model:
 
         feat_train = torch.FloatTensor(data_values)
         pos_train = torch.FloatTensor(pos_df.to_numpy(copy=True))
+        subcell_coloc_train = torch.FloatTensor(subcell_coloc_array.astype(np.float32, copy=False))
         subcell_train = torch.FloatTensor(subcell_array.astype(np.float32, copy=False))
 
         # add spatial (x,y) and subcellular features for each cell input
         train_data = TensorDataset(feat_train, torch.LongTensor(list(range(len(feat_train)))),
-                                torch.FloatTensor(Dropout_Mask), pos_train, subcell_train)
+                                torch.FloatTensor(Dropout_Mask), pos_train, subcell_coloc_train, subcell_train)
 
         # Use single-process loading for cross-platform stability (especially on Windows).
         dataloader = DataLoader(train_data, batch_size=self.opt.batch_size, shuffle=True, num_workers=0)
@@ -180,7 +187,17 @@ class non_celltype_GRN_model:
             truth_edges = [(int(Ground_Truth.columns[col])-1, int(Ground_Truth.index[row])-1) for row, col in zip(*nonzero_indices)]
             truth_edges = set(truth_edges)   # idx_send, idx_rec
 
-        return dataloader, num_nodes, num_genes, data, truth_edges, TF_mask, gene_name, subcell_train.shape[1]
+        return (
+            dataloader,
+            num_nodes,
+            num_genes,
+            data,
+            truth_edges,
+            TF_mask,
+            gene_name,
+            subcell_coloc_train.shape[1],
+            tuple(subcell_train.shape[1:]),
+        )
 
 
     def train_model(self):
@@ -191,11 +208,20 @@ class non_celltype_GRN_model:
         opt.device = torch.device('cuda:0' if use_gpu else 'cpu')
         print(opt.device)
 
-        dataloader, num_nodes, num_genes, data, truth_edges, TFmask2, gene_name, y_prime_input_dim = self.init_data()
+        (
+            dataloader,
+            num_nodes,
+            num_genes,
+            data,
+            truth_edges,
+            TFmask2,
+            gene_name,
+            y_prime_coloc_input_dim,
+            y_prime_grid_shape,
+        ) = self.init_data()
         adj_A_init = self.initalize_A_withTF(TFmask2)
 
         y_pos_dim = 64
-        y_prime_dim = 128
 
         cvae = CVAE_EAD_newED(
             adj_A_init,
@@ -203,8 +229,12 @@ class non_celltype_GRN_model:
             opt.n_hidden,
             opt.K,
             y_pos_dim,
-            y_prime_dim = y_prime_dim,
-            y_prime_input_dim=y_prime_input_dim,
+            y_prime_coloc_dim=opt.y_prime_coloc_dim,
+            y_prime_grid_dim=opt.y_prime_grid_dim,
+            y_prime_coloc_input_dim=y_prime_coloc_input_dim,
+            y_prime_grid_shape=y_prime_grid_shape,
+            gene_pool_channels=opt.subcell_gene_pool_channels,
+            cnn_hidden=opt.subcell_cnn_hidden,
         ).float().to(opt.device)
 
         print("Build model....")
@@ -234,11 +264,12 @@ class non_celltype_GRN_model:
                 optimizer.zero_grad()
 
                 # add Y_pos = (x,y) as the corresponding pos for each cell input
-                inputs, data_id, dropout_mask, Y_pos, Y_prime = data_batch
+                inputs, data_id, dropout_mask, Y_pos, Y_prime_coloc, Y_prime_grid = data_batch
 
                 inputs = inputs.to(opt.device)
                 Y_pos = Y_pos.to(opt.device)
-                Y_prime = Y_prime.to(opt.device)
+                Y_prime_coloc = Y_prime_coloc.to(opt.device)
+                Y_prime_grid = Y_prime_grid.to(opt.device)
                 # print(f"Y_pos is tensor: {torch.is_tensor(Y_pos)}")
                 data_ids.append(data_id.numpy())
                 #data_ids.append(data_id.cpu().detach().numpy())
@@ -246,11 +277,11 @@ class non_celltype_GRN_model:
 
                 if opt.dropout_mask:
                     print("opt.dropout_mask")
-                    loss, loss_rec, loss_KL, dec, hidden = cvae(inputs, Y_pos, Y_prime,
+                    loss, loss_rec, loss_KL, dec, hidden = cvae(inputs, Y_pos, Y_prime_coloc, Y_prime_grid,
                                                                            dropout_mask=dropout_mask.to(opt.device),
                                                                            temperature=temperature, opt=opt)
                 else:
-                    loss, loss_rec, loss_KL, dec, hidden = cvae(inputs, Y_pos, Y_prime, dropout_mask=None,
+                    loss, loss_rec, loss_KL, dec, hidden = cvae(inputs, Y_pos, Y_prime_coloc, Y_prime_grid, dropout_mask=None,
                                                                            temperature=temperature, opt=opt)
 
                 sparse_loss = opt.alpha * torch.mean(torch.abs(cvae.adj_A))
