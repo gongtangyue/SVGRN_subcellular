@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 
 
 def compute_gaussian_colocalization(sub_df, gene_list, sigma):
@@ -12,6 +13,8 @@ def compute_gaussian_colocalization(sub_df, gene_list, sigma):
 
     filtered = sub_df.loc[:, ["gene", "x", "y"]].copy()
     filtered["gene"] = filtered["gene"].astype(str)
+    filtered["x"] = pd.to_numeric(filtered["x"], errors="coerce")
+    filtered["y"] = pd.to_numeric(filtered["y"], errors="coerce")
     filtered = filtered[filtered["gene"].isin(gene_to_idx)]
     filtered = filtered.dropna(subset=["x", "y"])
     if filtered.shape[0] < 2:

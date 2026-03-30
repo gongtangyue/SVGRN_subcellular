@@ -99,7 +99,7 @@ class non_celltype_GRN_model:
             truth_edges,
             TF_mask,
             gene_name,
-            subcell_coloc_train.shape[1],
+            tuple(subcell_coloc_train.shape[1:]),
             tuple(subcell_train.shape[1:]),
         )
 
@@ -120,7 +120,7 @@ class non_celltype_GRN_model:
             truth_edges,
             TFmask2,
             gene_name,
-            y_prime_coloc_input_dim,
+            y_prime_coloc_shape,
             y_prime_grid_shape,
         ) = self.init_data()
         adj_A_init = self.initalize_A_withTF(TFmask2)
@@ -135,7 +135,7 @@ class non_celltype_GRN_model:
             y_pos_dim,
             y_prime_coloc_dim=opt.y_prime_coloc_dim,
             y_prime_grid_dim=opt.y_prime_grid_dim,
-            y_prime_coloc_input_dim=y_prime_coloc_input_dim,
+            y_prime_coloc_shape=y_prime_coloc_shape,
             y_prime_grid_shape=y_prime_grid_shape,
             gene_pool_channels=opt.subcell_gene_pool_channels,
             cnn_hidden=opt.subcell_cnn_hidden,

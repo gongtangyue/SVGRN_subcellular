@@ -33,7 +33,16 @@ class SC_GRN_model:
 
     def init_data(self):
 
-        All_Data = pd.read_csv(self.opt.data_file, index_col=[0])
+        try:
+            All_Data = pd.read_csv(self.opt.data_file, index_col=[0])
+        except OSError as exc:
+            if getattr(exc, "errno", None) != 22:
+                raise
+            print(
+                f"Default pandas CSV parser failed for {self.opt.data_file} "
+                f"with Errno 22; retrying with engine='python'."
+            )
+            All_Data = pd.read_csv(self.opt.data_file, index_col=[0], engine='python')
         All_Data.index = All_Data.index.astype(str)
         
         pos_df = All_Data[['x', 'y']].copy()
@@ -132,7 +141,7 @@ class SC_GRN_model:
             truth_edges,
             TF_mask,
             gene_name,
-            subcell_coloc_train.shape[1],
+            tuple(subcell_coloc_train.shape[1:]),
             tuple(subcell_train.shape[1:]),
         )
 
@@ -153,7 +162,7 @@ class SC_GRN_model:
             truth_edges,
             TFmask2,
             gene_name,
-            y_prime_coloc_input_dim,
+            y_prime_coloc_shape,
             y_prime_grid_shape,
         ) = self.init_data()
         
@@ -161,17 +170,17 @@ class SC_GRN_model:
         # PyTorch 2.6 defaults torch.load(weights_only=True), but stage1 saves a full model object.
         cvae = torch.load(opt.model_file, map_location=opt.device, weights_only=False).to(opt.device)    # load stage1 model
         print("model loaded")
-        if not hasattr(cvae, "y_prime_coloc_input_dim") or not hasattr(cvae, "y_prime_grid_shape"):
+        if not hasattr(cvae, "y_prime_coloc_shape") or not hasattr(cvae, "y_prime_grid_shape"):
             raise ValueError(
                 "Loaded stage1 model does not include both colocalization and grid subcellular conditions. "
-                "Please use a stage1.pt trained with the dual-condition subcellular representation."
+                "Please use a stage1.pt retrained with the CNN-based dual-condition subcellular representation."
             )
-        model_y_prime_coloc_input_dim = int(cvae.y_prime_coloc_input_dim)
-        if model_y_prime_coloc_input_dim != y_prime_coloc_input_dim:
+        model_y_prime_coloc_shape = tuple(getattr(cvae, "y_prime_coloc_shape", y_prime_coloc_shape))
+        if model_y_prime_coloc_shape != y_prime_coloc_shape:
             raise ValueError(
-                "Stage2 subcellular colocalization dim does not match the loaded stage1 model: "
-                f"stage2 got {y_prime_coloc_input_dim}, but stage1 expects {model_y_prime_coloc_input_dim}. "
-                "Please use the same gene set and colocalization parameters in stage1 and stage2."
+                "Stage2 subcellular colocalization shape does not match the loaded stage1 model: "
+                f"stage2 got {y_prime_coloc_shape}, but stage1 expects {model_y_prime_coloc_shape}. "
+                "Please use the same gene set and colocalization parameters in stage1 and stage2, and retrain stage1 after changing the coloc encoder."
             )
         model_y_prime_grid_shape = tuple(
             getattr(cvae, "y_prime_grid_shape", y_prime_grid_shape)
@@ -184,7 +193,7 @@ class SC_GRN_model:
             )
         print(
             "Stage2 subcellular condition shapes match loaded stage1 model: "
-            f"coloc_dim={model_y_prime_coloc_input_dim}, grid_shape={model_y_prime_grid_shape}"
+            f"coloc_shape={model_y_prime_coloc_shape}, grid_shape={model_y_prime_grid_shape}"
         )
 
         optimizer2 = optim.RMSprop([cvae.adj_A], lr=opt.lr * 0.2) # only update

@@ -48,6 +48,8 @@ def build_gene_grid_from_subcellular_csv(
 
     filtered = sub_df.copy()
     filtered["gene"] = filtered["gene"].astype(str)
+    filtered["x"] = pd.to_numeric(filtered["x"], errors="coerce")
+    filtered["y"] = pd.to_numeric(filtered["y"], errors="coerce")
     filtered = filtered[filtered["gene"].isin(gene_to_idx)]
     filtered = filtered.dropna(subset=["x", "y"])
     if filtered.empty:

@@ -10,7 +10,7 @@ import sys
 def kl_loss(z_mean, z_stddev):
     mean_sq = z_mean * z_mean
     stddev_sq = z_stddev * z_stddev
-    return 0.5 * torch.mean(mean_sq + stddev_sq - torch.log(stddev_sq) - 1)
+    return 0.5 * torch.sum(mean_sq + stddev_sq - torch.log(stddev_sq) - 1)
 
 
 class LossFunctions:
@@ -48,12 +48,12 @@ class LossFunctions:
         return loss
     
     def new_KL_loss(self, mu, logvar):
-        KLD = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+        KLD = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp())
         return KLD
     
     def weighted_new_KL_loss(self, mu, logvar, weight):
-        weighted_KL = torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), 1) * weight
-        KLD = -0.5 * torch.sum(weighted_KL)
+        per_sample_kl = -0.5 * torch.mean(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+        KLD = torch.sum(per_sample_kl * weight) / torch.clamp(torch.sum(weight), min=self.eps)
 
         return KLD
 
@@ -273,6 +273,28 @@ class Encoder_Yprime_Net(nn.Module):
         return y_prime
 
 
+class Encoder_Yprime_ColocNet(nn.Module):
+    def __init__(
+        self,
+        cnn_hidden=32,
+        y_prime_dim=64,
+    ):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Conv2d(1, cnn_hidden, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(cnn_hidden, cnn_hidden, kernel_size=3, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+        )
+        self.proj = nn.Linear(cnn_hidden, y_prime_dim)
+
+    def forward(self, y_prime_coloc):
+        feat = self.net(y_prime_coloc.unsqueeze(1))
+        feat = feat.flatten(1)
+        return self.proj(feat)
+
+
 class Encoder_Yprime_GridNet(nn.Module):
     def __init__(
         self,
@@ -310,7 +332,7 @@ class CVAE_EAD_newED(nn.Module):
         y_pos_dim,
         y_prime_coloc_dim,
         y_prime_grid_dim,
-        y_prime_coloc_input_dim=2,
+        y_prime_coloc_shape=None,
         y_prime_grid_shape=None,
         gene_pool_channels=16,
         cnn_hidden=32,
@@ -318,7 +340,7 @@ class CVAE_EAD_newED(nn.Module):
         super(CVAE_EAD_newED, self).__init__()
         # adj_A_init, x_dim = 1, z_dim=opt.n_hidden=128, opt.K=1
         self.y_pos_dim = y_pos_dim    # dim of the y encoded feature
-        self.y_prime_coloc_input_dim = y_prime_coloc_input_dim
+        self.y_prime_coloc_shape = tuple(y_prime_coloc_shape) if y_prime_coloc_shape is not None else None
         self.y_prime_coloc_dim = y_prime_coloc_dim
         self.y_prime_grid_dim = y_prime_grid_dim
         self.y_prime_dim = self.y_prime_coloc_dim + self.y_prime_grid_dim
@@ -327,10 +349,9 @@ class CVAE_EAD_newED(nn.Module):
         self.n_gene = n_gene = len(adj_A)
         nonLinear = nn.Tanh()
         self.encoder_Y = Encoder_Y_Net(self.y_pos_dim, nonLinear)
-        self.encoder_Yprime_coloc = Encoder_Yprime_Net(
-            self.y_prime_coloc_input_dim,
-            self.y_prime_coloc_dim,
-            nonLinear,
+        self.encoder_Yprime_coloc = Encoder_Yprime_ColocNet(
+            cnn_hidden=cnn_hidden,
+            y_prime_dim=self.y_prime_coloc_dim,
         )
         self.encoder_Yprime_grid = Encoder_Yprime_GridNet(
             n_gene=n_gene,

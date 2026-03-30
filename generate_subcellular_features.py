@@ -73,6 +73,13 @@ def _load_subcellular_csv(csv_path):
     sub_df = pd.read_csv(csv_path)
     if sub_df.empty:
         return None
+    if {"gene", "x", "y"}.issubset(sub_df.columns):
+        sub_df = sub_df.copy()
+        sub_df["x"] = pd.to_numeric(sub_df["x"], errors="coerce")
+        sub_df["y"] = pd.to_numeric(sub_df["y"], errors="coerce")
+        sub_df = sub_df.dropna(subset=["x", "y"])
+        if sub_df.empty:
+            return None
     return sub_df
 
 
