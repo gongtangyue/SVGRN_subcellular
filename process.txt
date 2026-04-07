@@ -1,0 +1,45 @@
+python .\gen_data.py `
+  --expr-path .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --grn-path .\in_sim\g110_c05_n01\cell_specific_GRN `
+  --output-dir .\in_sim\g110_c05_n01\subcellular_data `
+  --mode poisson `
+  --count-scale 20 `
+  --C 1.0 `
+  --k-hot 2 `
+  --sigma-reg 0.02 `
+  --b-reg 0.01 `
+  --beta0 -1.0
+
+python .\scMultiSim_DataPrepare\sim_prepare.py --folder-name g110_c05_n01 --n-clusters 4 --gene-number 110
+
+python .\generate_subcellular_features.py .\in_sim\g110_c05_n01 `
+  --expr-file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --subcellular-data-dir .\in_sim\g110_c05_n01\subcellular_data `
+  --output-dir .\in_sim\g110_c05_n01\subcellular_features `
+  --subcell-sigma 0.03 `
+  --subcell-grid-size 64 `
+  --subcell-r-cell 0.05 `
+  --subcell-splat-sigma 1.0 `
+  --subcell-splat-radius 1 `
+  --subcell-grid-norm log1p `
+  --num-workers 1
+
+python .\main_stage1.py `
+  --task simulation_allcell_GRN `
+  --setting default `
+  --data_file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --tf_list .\in_sim\g110_c05_n01\TF_list.txt `
+  --net_file .\in_sim\g110_c05_n01\allcells_GRN.csv `
+  --subcellular_feature_dir .\in_sim\g110_c05_n01\subcellular_features `
+  --save_name .\runs\stage1\g110_c05_n01 `
+  --GPU
+
+python .\main_stage2_allcell.py `
+  --setting default `
+  --data_file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --cellname_list .\in_sim\g110_c05_n01\cellname_list_all.npy `
+  --model_file .\runs\stage1\g110_c05_n01\YYYYMMDD_HHMMSS\stage1.pt `
+  --net_path .\in_sim\g110_c05_n01\cell_specific_GRN `
+  --subcellular_feature_dir .\in_sim\g110_c05_n01\subcellular_features `
+  --save_path .\runs\stage2\g110_c05_n01
+  --GPU

@@ -12,7 +12,7 @@ def softplus(x):
     return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
 
-def sample_counts(expr_values, mode="poisson", count_scale=20.0):
+def sample_counts(expr_values, mode="poisson", count_scale=5.0):
     if mode == "poisson":
         lam = np.clip(expr_values * count_scale, 0, None)
         return rng.poisson(lam)
@@ -53,67 +53,58 @@ def eval_field(points, mu, sigma, amp, bias):
     return out
 
 
-def sample_points_by_lambda(cand, lam, n):
+def sample_points_by_lambda(cand, lam, n, top_r=None):
     if n <= 0:
         return np.empty((0, 2))
     w = np.clip(lam, 0, None)
+    pool = cand
+
+    if top_r is not None:
+        if not (0 < top_r <= 100):
+            raise ValueError(f"top_r must be in (0, 100], got {top_r}")
+        top_r_count = max(1, int(np.ceil(cand.shape[0] * (top_r / 100.0))))
+        rank_idx = np.argsort(w)[::-1][:top_r_count]
+        pool = cand[rank_idx]
+        w = w[rank_idx]
+
     s = w.sum()
     if s <= 0:
-        idx = rng.integers(0, cand.shape[0], size=n)
-        return cand[idx]
+        idx = rng.integers(0, pool.shape[0], size=n)
+        return pool[idx]
     p = w / s
-    idx = rng.choice(cand.shape[0], size=n, replace=True, p=p)
-    return cand[idx]
+    idx = rng.choice(pool.shape[0], size=n, replace=True, p=p)
+    return pool[idx]
 
 
 def matrix_to_target_regulators(matrix_df, gene_cols):
-    genes = set(gene_cols)
+    matrix_df = matrix_df.copy()
     matrix_df.index = matrix_df.index.map(str)
     matrix_df.columns = matrix_df.columns.map(str)
 
-    target_to_regs = {}
-    row_genes = [g for g in matrix_df.index if g in genes]
-    col_genes = [g for g in matrix_df.columns if g in genes]
-    if not row_genes or not col_genes:
-        return target_to_regs
+    gene_set = {str(g) for g in gene_cols}
+    valid_targets = [g for g in matrix_df.index if g in gene_set]
+    valid_regs = [g for g in matrix_df.columns if g in gene_set]
+    sub = matrix_df.loc[valid_targets, valid_regs]
 
-    sub = matrix_df.loc[row_genes, col_genes]
-    for target in sub.columns:
-        vals = sub[target]
+    target_to_regs = {}
+    for target, vals in sub.iterrows():
         regs = vals.index[vals.to_numpy(dtype=float) != 0].tolist()
         if regs:
             target_to_regs[str(target)] = [str(r) for r in regs]
+
     return target_to_regs
-
-
-def edge_df_to_target_regulators(edges_df, gene_cols):
-    genes = set(gene_cols)
-    required = {"gene1", "gene2"}
-    if not required.issubset(edges_df.columns):
-        raise ValueError("Edge table must contain columns: gene1, gene2")
-
-    edges_df = edges_df[
-        edges_df["gene1"].astype(str).isin(genes)
-        & edges_df["gene2"].astype(str).isin(genes)
-    ]
-    return edges_df.groupby("gene2")["gene1"].apply(lambda x: [str(v) for v in x]).to_dict()
 
 
 def load_target_regulators(cell_id, grn_path, gene_cols):
     grn_path = Path(grn_path)
 
     if grn_path.is_dir():
-        candidates = [
-            grn_path / f"{cell_id}.csv",
-            grn_path / f"{cell_id}_gt_gene_pairs.csv",
-        ]
-        file_path = next((p for p in candidates if p.exists()), None)
-        if file_path is None:
+        file_path = grn_path / f"{cell_id}.csv"
+        if not file_path.exists():
             return {}
 
         df = pd.read_csv(file_path, index_col=0)
-        if {"gene1", "gene2"}.issubset(df.columns):
-            return edge_df_to_target_regulators(df, gene_cols)
+        
         return matrix_to_target_regulators(df, gene_cols)
 
     raise FileNotFoundError(f"GRN directory not found: {grn_path}")
@@ -124,6 +115,8 @@ def generate_one_cell_transcripts(
     row,
     gene_cols,
     grn_path,
+    C=1.0,
+    top_r=None,
     mode="poisson",
     count_scale=20.0,
     r_cell=0.05,
@@ -144,13 +137,22 @@ def generate_one_cell_transcripts(
     u = u_gene_bias(cand, center, r_nuc, u_nuc=0.5, u_cyt=0.0)
 
     regs_in_cell = sorted({r for regs in target_to_regs.values() for r in regs})
-    f_reg = {}
+    counts_by_gene = {str(gene): int(n) for gene, n in zip(gene_cols, counts)}
+
+    # Build one shared spatial field per TF so the TF's own transcripts and its
+    # downstream targets can be sampled from the same underlying hotspots.
+    tf_fields = {}
     for reg in regs_in_cell:
-        amp = float(max(row.get(reg, 0.0), 0.0)) + 1e-6
+        if counts_by_gene.get(reg, 0) <= 0:
+            continue
+        amp = float(max(row.get(reg, 0.0), 0.0))
+        if amp <= 0:
+            continue
         mu = build_hotspots(center, r_nuc, K=k_hot)
-        f_reg[reg] = eval_field(cand, mu, sigma=sigma_reg, amp=amp, bias=b_reg)
+        tf_fields[reg] = eval_field(cand, mu, sigma=sigma_reg, amp=amp, bias=b_reg)
 
     records = []
+    zero_field = np.zeros(cand.shape[0], dtype=float)
     for gene, n in zip(gene_cols, counts):
         n = int(n)
         if n <= 0:
@@ -158,13 +160,17 @@ def generate_one_cell_transcripts(
 
         regs = target_to_regs.get(str(gene), [])
 
-        grn_term = np.zeros(cand.shape[0], dtype=float)
+        self_term = tf_fields.get(str(gene), zero_field)
+        grn_term = self_term.copy()
         for reg in regs:
-            if reg in f_reg:
-                grn_term += f_reg[reg]
+            if reg == str(gene):
+                continue
+            if reg in tf_fields:
+                grn_term += tf_fields[reg]
 
-        lam = softplus(beta0 + grn_term + u)
-        pts = sample_points_by_lambda(cand, lam, n)
+        lam = softplus(beta0 + C * grn_term + u)
+        #lam = C * grn_term
+        pts = sample_points_by_lambda(cand, lam, n, top_r=top_r)
         records.append(pd.DataFrame({"gene": str(gene), "x": pts[:, 0], "y": pts[:, 1]}))
 
     if records:
@@ -175,12 +181,14 @@ def generate_one_cell_transcripts(
 def generate_subcellular_transcripts(
     expr_path,
     grn_path,
+    C=1.0,
+    top_r=None,
     mode="poisson",
     count_scale=20.0,
     r_cell=0.05,
     r_nuc=0.025,
     m_candidates=40000,
-    k_hot=2,
+    k_hot=1,
     sigma_reg=0.02,
     b_reg=0.01,
     beta0=-1.0,
@@ -201,6 +209,8 @@ def generate_subcellular_transcripts(
             row=row,
             gene_cols=gene_cols,
             grn_path=grn_path,
+            C=C,
+            top_r=top_r,
             mode=mode,
             count_scale=count_scale,
             r_cell=r_cell,
@@ -219,6 +229,8 @@ def generate_and_save_subcellular_transcripts(
     expr_path,
     grn_path,
     output_dir,
+    C=1.0,
+    top_r=None,
     mode="poisson",
     count_scale=20.0,
     r_cell=0.05,
@@ -256,6 +268,8 @@ def generate_and_save_subcellular_transcripts(
             row=row,
             gene_cols=gene_cols,
             grn_path=grn_path,
+            C=C,
+            top_r=top_r,
             mode=mode,
             count_scale=count_scale,
             r_cell=r_cell,
@@ -295,6 +309,19 @@ def parse_args():
         help="Optional output directory for per-cell transcript CSV files.",
     )
     parser.add_argument("--mode", type=str, default="poisson", choices=["poisson", "round"])
+    parser.add_argument("--C", type=float, default=1.0, help="Scale factor applied to grn_term.")
+    parser.add_argument(
+        "--top-p",
+        type=int,
+        default=None,
+        help="Keep only the top-p candidate points after ranking by lam before sampling.",
+    )
+    parser.add_argument(
+        "--top-r",
+        type=float,
+        default=None,
+        help="Keep only the top-r percent candidate points after ranking by lam before sampling.",
+    )
     parser.add_argument("--count-scale", type=float, default=20.0)
     parser.add_argument("--r-cell", type=float, default=0.05)
     parser.add_argument("--r-nuc", type=float, default=0.025)
@@ -316,6 +343,8 @@ def main():
             expr_path=args.expr_path,
             grn_path=args.grn_path,
             output_dir=args.output_dir,
+            C=args.C,
+            top_r=args.top_r,
             mode=args.mode,
             count_scale=args.count_scale,
             r_cell=args.r_cell,
@@ -341,6 +370,8 @@ def main():
     cell_transcripts = generate_subcellular_transcripts(
         expr_path=args.expr_path,
         grn_path=args.grn_path,
+        C=args.C,
+        top_r=args.top_r,
         mode=args.mode,
         count_scale=args.count_scale,
         r_cell=args.r_cell,
