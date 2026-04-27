@@ -4,13 +4,15 @@ python .\gen_data.py `
   --output-dir .\in_sim\g110_c05_n01\subcellular_data `
   --mode poisson `
   --count-scale 20 `
-  --C 1.0 `
+  --C 2.0 `
   --k-hot 2 `
   --sigma-reg 0.02 `
   --b-reg 0.01 `
-  --beta0 -1.0
+  --beta0 -1.0 `
+  --top-r 0.5
 
 python .\scMultiSim_DataPrepare\sim_prepare.py --folder-name g110_c05_n01 --n-clusters 4 --gene-number 110
+python .\in_sim\make_stage2_inputs.py .\in_sim\g110_c05_n01
 
 python .\generate_subcellular_features.py .\in_sim\g110_c05_n01 `
   --expr-file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
