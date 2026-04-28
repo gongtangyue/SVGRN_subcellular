@@ -11,6 +11,20 @@ python .\gen_data.py `
   --beta0 -1.0 `
   --top-r 0.5
 
+python gen_data_hub.py `
+  --expr-path in_sim\g110_c2k_n01\expression_loc_cluster_wlayout.csv `
+  --grn-path in_sim\g110_c2k_n01\cell_specific_GRN `
+  --output-dir in_sim\g110_c2k_n01\subcellular_data_hub `
+  --k-hub 3 `
+  --top-r 10 `
+  --count-scale 20 `
+  --m-candidates 40000 `
+  --p-reg 0.7 `
+  --p-basal 0.2 `
+  --p-noise 0.1 `
+  --save-hub-meta
+
+
 python .\scMultiSim_DataPrepare\sim_prepare.py --folder-name g110_c05_n01 --n-clusters 4 --gene-number 110
 python .\in_sim\make_stage2_inputs.py .\in_sim\g110_c05_n01
 
