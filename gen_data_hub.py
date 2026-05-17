@@ -8,8 +8,6 @@ from gen_data import (
     sample_counts,
     sample_points_by_lambda,
     sample_uniform_in_disk,
-    softplus,
-    u_gene_bias,
 )
 
 
@@ -67,70 +65,21 @@ def build_hubs(center, r_nuc, K=3, sigma_reg=0.02, strength_scale=1.0):
     )
 
 
-def build_tf_target_sets(target_to_regs):
-    tf_targets = {}
-    tf_target_weights = {}
-    for target, regs in target_to_regs.items():
-        for reg, weight in regs:
-            tf_targets.setdefault(reg, set()).add(target)
-            tf_target_weights.setdefault(reg, {})[target] = float(weight)
-    return tf_targets, tf_target_weights
-
-
-def shared_regulator_score(target_a, target_b, target_to_reg_weights):
-    a = target_to_reg_weights.get(target_a, {})
-    b = target_to_reg_weights.get(target_b, {})
-    shared = set(a).intersection(b)
-    if not shared:
-        return 0.0
-    return sum(min(a[t], b[t]) for t in shared)
-
-
-def assign_targets_to_hubs(target_to_regs, counts_by_gene, row, hubs, coop_strength=2.0):
+def assign_targets_to_hubs(target_to_regs, hubs):
     targets = sorted(target_to_regs)
     if not targets:
         return {}
 
-    target_to_reg_weights = {
-        target: {reg: float(weight) for reg, weight in regs}
-        for target, regs in target_to_regs.items()
+    hub_strength = hubs["strength"].to_numpy(dtype=float)
+    if hub_strength.sum() <= 0:
+        probs = np.full(len(hubs), 1.0 / len(hubs))
+    else:
+        probs = hub_strength / hub_strength.sum()
+
+    return {
+        target: int(rng.choice(len(hubs), p=probs))
+        for target in targets
     }
-    degrees = {target: len(target_to_regs[target]) for target in targets}
-    expr = {target: max(float(row.get(target, 0.0)), 0.0) for target in targets}
-    order = sorted(
-        targets,
-        key=lambda target: (degrees[target], expr[target], counts_by_gene.get(target, 0)),
-        reverse=True,
-    )
-
-    assignments = {}
-    hub_members = {i: [] for i in range(len(hubs))}
-
-    for seed_idx, target in enumerate(order[: len(hubs)]):
-        hub_idx = seed_idx % len(hubs)
-        assignments[target] = hub_idx
-        hub_members[hub_idx].append(target)
-
-    for target in order[len(hubs) :]:
-        scores = []
-        for hub_idx, hub in hubs.iterrows():
-            coop = sum(
-                shared_regulator_score(target, other, target_to_reg_weights)
-                for other in hub_members[hub_idx]
-            )
-            hub_prior = float(hub["strength"])
-            scores.append(hub_prior + coop_strength * coop)
-
-        scores = np.asarray(scores, dtype=float)
-        if scores.sum() <= 0:
-            hub_idx = int(rng.integers(0, len(hubs)))
-        else:
-            probs = scores / scores.sum()
-            hub_idx = int(rng.choice(len(hubs), p=probs))
-        assignments[target] = hub_idx
-        hub_members[hub_idx].append(target)
-
-    return assignments
 
 
 def tf_hub_weights_from_targets(target_to_regs, target_to_hub, hubs):
@@ -163,32 +112,16 @@ def hub_field(cand, hubs, weights=None, bias=0.0):
     return out
 
 
-def sample_gene_mixture(
-    cand,
-    n,
-    regulatory_lam,
-    basal_lam,
-    p_reg=0.7,
-    p_basal=0.2,
-    p_noise=0.1,
-    top_r=None,
-):
-    weights = np.asarray([p_reg, p_basal, p_noise], dtype=float)
-    weights = weights / weights.sum()
-    n_reg, n_basal, n_noise = rng.multinomial(n, weights)
+def sample_points_from_hubs(cand, hubs, weights, n, top_r=None):
+    lam = hub_field(cand, hubs, weights=weights, bias=0.0)
+    return sample_points_by_lambda(cand, lam, n, top_r=top_r)
 
-    parts = []
-    if n_reg > 0:
-        parts.append(sample_points_by_lambda(cand, regulatory_lam, n_reg, top_r=top_r))
-    if n_basal > 0:
-        parts.append(sample_points_by_lambda(cand, basal_lam, n_basal, top_r=top_r))
-    if n_noise > 0:
-        idx = rng.integers(0, cand.shape[0], size=n_noise)
-        parts.append(cand[idx])
 
-    pts = np.vstack(parts) if parts else np.empty((0, 2))
-    rng.shuffle(pts)
-    return pts
+def sample_background_points(cand, n):
+    if n <= 0:
+        return np.empty((0, 2))
+    idx = rng.integers(0, cand.shape[0], size=n)
+    return cand[idx]
 
 
 def target_hub_weights(gene, target_to_hub, hubs):
@@ -204,7 +137,6 @@ def generate_one_cell_transcripts_hub(
     row,
     gene_cols,
     grn_path,
-    C=1.0,
     top_r=None,
     mode="poisson",
     count_scale=20.0,
@@ -213,57 +145,51 @@ def generate_one_cell_transcripts_hub(
     m_candidates=40000,
     k_hub=3,
     sigma_reg=0.02,
-    b_reg=0.01,
-    beta0=-1.0,
-    p_reg=0.7,
-    p_basal=0.2,
-    p_noise=0.1,
-    coop_strength=2.0,
 ):
     expr_values = row[gene_cols].to_numpy(dtype=float)
     counts = sample_counts(expr_values, mode=mode, count_scale=count_scale)
-    counts_by_gene = {str(gene): int(n) for gene, n in zip(gene_cols, counts)}
 
     center = row[["x", "y"]].to_numpy(dtype=float)
     target_to_regs = load_target_regulator_weights(str(cell_id), grn_path, gene_cols)
 
     hubs = build_hubs(center, r_nuc, K=k_hub, sigma_reg=sigma_reg)
-    target_to_hub = assign_targets_to_hubs(
-        target_to_regs=target_to_regs,
-        counts_by_gene=counts_by_gene,
-        row=row,
-        hubs=hubs,
-        coop_strength=coop_strength,
-    )
+    target_to_hub = assign_targets_to_hubs(target_to_regs=target_to_regs, hubs=hubs)
     tf_to_hub_weights = tf_hub_weights_from_targets(target_to_regs, target_to_hub, hubs)
 
     cand = sample_uniform_in_disk(center, r_cell, m_candidates)
-    u = u_gene_bias(cand, center, r_nuc, u_nuc=0.5, u_cyt=0.0)
-    basal_lam = softplus(beta0 + u)
 
     records = []
-    for gene, n in zip(gene_cols, counts):
-        n = int(n)
-        if n <= 0:
+    target_genes = set(target_to_hub)
+    tf_genes = set(tf_to_hub_weights)
+    counts_items = [(str(gene), int(n)) for gene, n in zip(gene_cols, counts)]
+
+    # 1) Regulated targets are generated directly from their assigned hub.
+    for gene, n in counts_items:
+        if n <= 0 or gene not in target_genes or gene in tf_genes:
             continue
 
-        if str(gene) in tf_to_hub_weights:
-            reg_weights = tf_to_hub_weights[str(gene)]
-        else:
-            reg_weights = target_hub_weights(gene, target_to_hub, hubs)
+        weights = target_hub_weights(gene, target_to_hub, hubs)
+        pts = sample_points_from_hubs(cand, hubs, weights, n, top_r=top_r)
+        records.append(pd.DataFrame({"gene": gene, "x": pts[:, 0], "y": pts[:, 1]}))
 
-        regulatory_lam = softplus(beta0 + C * hub_field(cand, hubs, reg_weights, bias=b_reg) + u)
-        pts = sample_gene_mixture(
-            cand=cand,
-            n=n,
-            regulatory_lam=regulatory_lam,
-            basal_lam=basal_lam,
-            p_reg=p_reg,
-            p_basal=p_basal,
-            p_noise=p_noise,
-            top_r=top_r,
-        )
-        records.append(pd.DataFrame({"gene": str(gene), "x": pts[:, 0], "y": pts[:, 1]}))
+    # 2) TFs are generated after targets, using the hubs of their regulated targets.
+    for gene, n in counts_items:
+        if n <= 0 or gene not in tf_genes:
+            continue
+
+        weights = tf_to_hub_weights[gene]
+        pts = sample_points_from_hubs(cand, hubs, weights, n, top_r=top_r)
+        records.append(pd.DataFrame({"gene": gene, "x": pts[:, 0], "y": pts[:, 1]}))
+
+    # 3) Genes without a target/TF role are kept as background transcripts.
+    for gene, n in counts_items:
+        if n <= 0:
+            continue
+        if gene in target_genes or gene in tf_genes:
+            continue
+
+        pts = sample_background_points(cand, n)
+        records.append(pd.DataFrame({"gene": gene, "x": pts[:, 0], "y": pts[:, 1]}))
 
     if records:
         return pd.concat(records, ignore_index=True), hubs, target_to_hub, tf_to_hub_weights
@@ -274,7 +200,6 @@ def generate_and_save_subcellular_transcripts_hub(
     expr_path,
     grn_path,
     output_dir,
-    C=1.0,
     top_r=None,
     mode="poisson",
     count_scale=20.0,
@@ -283,12 +208,6 @@ def generate_and_save_subcellular_transcripts_hub(
     m_candidates=40000,
     k_hub=3,
     sigma_reg=0.02,
-    b_reg=0.01,
-    beta0=-1.0,
-    p_reg=0.7,
-    p_basal=0.2,
-    p_noise=0.1,
-    coop_strength=2.0,
     save_hub_meta=False,
     progress_every=1,
     limit_cells=None,
@@ -322,7 +241,6 @@ def generate_and_save_subcellular_transcripts_hub(
             row=row,
             gene_cols=gene_cols,
             grn_path=grn_path,
-            C=C,
             top_r=top_r,
             mode=mode,
             count_scale=count_scale,
@@ -331,12 +249,6 @@ def generate_and_save_subcellular_transcripts_hub(
             m_candidates=m_candidates,
             k_hub=k_hub,
             sigma_reg=sigma_reg,
-            b_reg=b_reg,
-            beta0=beta0,
-            p_reg=p_reg,
-            p_basal=p_basal,
-            p_noise=p_noise,
-            coop_strength=coop_strength,
         )
         df.to_csv(output_dir / f"{cell_id}_subcellular.csv", index=False)
 
@@ -380,7 +292,6 @@ def parse_args():
         help="Output directory for per-cell transcript CSV files.",
     )
     parser.add_argument("--mode", type=str, default="poisson", choices=["poisson", "round"])
-    parser.add_argument("--C", type=float, default=1.0)
     parser.add_argument("--top-r", type=float, default=None)
     parser.add_argument("--count-scale", type=float, default=20.0)
     parser.add_argument("--r-cell", type=float, default=0.05)
@@ -388,12 +299,6 @@ def parse_args():
     parser.add_argument("--m-candidates", type=int, default=40000)
     parser.add_argument("--k-hub", type=int, default=3)
     parser.add_argument("--sigma-reg", type=float, default=0.02)
-    parser.add_argument("--b-reg", type=float, default=0.01)
-    parser.add_argument("--beta0", type=float, default=-1.0)
-    parser.add_argument("--p-reg", type=float, default=0.7)
-    parser.add_argument("--p-basal", type=float, default=0.2)
-    parser.add_argument("--p-noise", type=float, default=0.1)
-    parser.add_argument("--coop-strength", type=float, default=2.0)
     parser.add_argument("--save-hub-meta", action="store_true")
     parser.add_argument("--progress-every", type=int, default=1)
     parser.add_argument("--limit-cells", type=int, default=None)
@@ -406,7 +311,6 @@ def main():
         expr_path=args.expr_path,
         grn_path=args.grn_path,
         output_dir=args.output_dir,
-        C=args.C,
         top_r=args.top_r,
         mode=args.mode,
         count_scale=args.count_scale,
@@ -415,12 +319,6 @@ def main():
         m_candidates=args.m_candidates,
         k_hub=args.k_hub,
         sigma_reg=args.sigma_reg,
-        b_reg=args.b_reg,
-        beta0=args.beta0,
-        p_reg=args.p_reg,
-        p_basal=args.p_basal,
-        p_noise=args.p_noise,
-        coop_strength=args.coop_strength,
         save_hub_meta=args.save_hub_meta,
         progress_every=args.progress_every,
         limit_cells=args.limit_cells,

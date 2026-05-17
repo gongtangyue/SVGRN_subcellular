@@ -50,6 +50,17 @@ python .\main_stage1.py `
   --save_name .\runs\stage1\g110_c05_n01 `
   --GPU
 
+python .\main_stage1.py `
+  --task simulation_allcell_GRN `
+  --setting default `
+  --data_file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --tf_list .\in_sim\g110_c05_n01\TF_list.txt `
+  --net_file .\in_sim\g110_c05_n01\allcells_GRN.csv `
+  --subcellular_feature_dir .\in_sim\g110_c05_n01\subcellular_features\subcellular_data_hub `
+  --save_name .\runs\stage1\g110_c05_n01\hub `
+  --GPU
+
+
 python .\main_stage2_allcell.py `
   --setting default `
   --data_file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
@@ -57,5 +68,15 @@ python .\main_stage2_allcell.py `
   --model_file .\runs\stage1\g110_c05_n01\YYYYMMDD_HHMMSS\stage1.pt `
   --net_path .\in_sim\g110_c05_n01\cell_specific_GRN `
   --subcellular_feature_dir .\in_sim\g110_c05_n01\subcellular_features `
-  --save_path .\runs\stage2\g110_c05_n01
+  --save_path .\runs\stage2\g110_c05_n01 `
+  --start_idx 1 `
+  --end_idx -1 `
   --GPU
+
+python .\evaluate_allcell.py `
+  --expr_file .\in_sim\g110_c05_n01\expression_loc_cluster_wlayout.csv `
+  --tf_file .\in_sim\g110_c05_n01\TF_list.txt `
+  --cellname_file .\in_sim\g110_c05_n01\cellname_list_all.npy `
+  --gt_scgrn_folder .\in_sim\g110_c05_n01\cell_specific_GRN `
+  --stage1_run_dir .\runs\stage1\g110_c05_n01\tfFirst_top10reg0005k100\20260429_005214 `
+  --stage2_run_dir .\runs\stage2\g110_c05_n01\tfFirst_top10reg0005k100\20260429_005736
