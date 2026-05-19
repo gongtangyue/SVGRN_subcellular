@@ -261,54 +261,28 @@ class Encoder_Y_Net(nn.Module):
         return y_pos
 
 
-class Encoder_Yprime_Net(nn.Module):
-    def __init__(self, y_prime_input_dim, y_prime_dim, nonLinear):
-        super(Encoder_Yprime_Net, self).__init__()
-        hidden_dim = 128 if y_prime_input_dim > 128 else 64
-
-        self.y_prime_encoder = torch.nn.ModuleList([
-            nn.Linear(y_prime_input_dim, hidden_dim),
-            nonLinear,
-            nn.Linear(hidden_dim, y_prime_dim)
-        ])
-
-    def forward(self, y_prime):
-        for layer in self.y_prime_encoder:
-            y_prime = layer(y_prime)
-
-        return y_prime
-
-
-class Encoder_Yprime_ColocMLPNet(Encoder_Yprime_Net):
-    def __init__(self, y_prime_input_dim, y_prime_dim, nonLinear):
-        super().__init__(y_prime_input_dim, y_prime_dim, nonLinear)
-
-
-class Encoder_Yprime_GridCNNNet(nn.Module):
-    def __init__(
-        self,
-        n_gene,
-        gene_pool_channels=16,
-        cnn_hidden=32,
-        y_prime_dim=64,
-    ):
+class Encoder_Yprime_ColocDirectNet(nn.Module):
+    def __init__(self):
         super().__init__()
-        self.gene_pool = nn.Conv2d(n_gene, gene_pool_channels, kernel_size=1, stride=1, padding=0)
-        self.net = nn.Sequential(
-            self.gene_pool,
-            nn.ReLU(inplace=True),
-            nn.Conv2d(gene_pool_channels, cnn_hidden, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(cnn_hidden, cnn_hidden, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d((1, 1)),
-        )
-        self.proj = nn.Linear(cnn_hidden, y_prime_dim)
+
+    def forward(self, y_prime_coloc):
+        if y_prime_coloc.dim() != 3:
+            raise ValueError(
+                f"Expected Y_prime_coloc to be 3D [batch, genes, genes], got shape {tuple(y_prime_coloc.shape)}"
+            )
+        return y_prime_coloc
+
+
+class Encoder_Yprime_GridDirectNet(nn.Module):
+    def __init__(self):
+        super().__init__()
 
     def forward(self, y_prime_grid):
-        feat = self.net(y_prime_grid)
-        feat = feat.flatten(1)
-        return self.proj(feat)
+        if y_prime_grid.dim() != 4:
+            raise ValueError(
+                f"Expected y_prime_grid to be 4D [batch, genes, height, width], got shape {tuple(y_prime_grid.shape)}"
+            )
+        return y_prime_grid.flatten(start_dim=2)
 
 
 class CVAE_EAD_newED(nn.Module):
@@ -330,25 +304,19 @@ class CVAE_EAD_newED(nn.Module):
         # adj_A_init, x_dim = 1, z_dim=opt.n_hidden=128, opt.K=1
         self.y_pos_dim = y_pos_dim    # dim of the y encoded feature
         self.y_prime_coloc_input_dim = y_prime_coloc_input_dim
-        self.y_prime_coloc_dim = y_prime_coloc_dim
+        self.y_prime_coloc_dim = self.y_prime_coloc_input_dim
         self.y_prime_grid_shape = tuple(y_prime_grid_shape) if y_prime_grid_shape is not None else None
-        self.y_prime_grid_dim = y_prime_grid_dim
+        if self.y_prime_grid_shape is None:
+            self.y_prime_grid_dim = y_prime_grid_dim
+        else:
+            self.y_prime_grid_dim = int(np.prod(self.y_prime_grid_shape[1:]))
         self.y_prime_dim = self.y_prime_coloc_dim + self.y_prime_grid_dim
         self.adj_A = nn.Parameter(Variable(torch.from_numpy(adj_A).double(), requires_grad=True, name='adj_A'))
         self.n_gene = n_gene = len(adj_A)
         nonLinear = nn.Tanh()
         self.encoder_Y = Encoder_Y_Net(self.y_pos_dim, nonLinear)
-        self.encoder_Yprime_coloc = Encoder_Yprime_ColocMLPNet(
-            self.y_prime_coloc_input_dim,
-            self.y_prime_coloc_dim,
-            nonLinear,
-        )
-        self.encoder_Yprime_grid = Encoder_Yprime_GridCNNNet(
-            n_gene=n_gene,
-            gene_pool_channels=gene_pool_channels,
-            cnn_hidden=cnn_hidden,
-            y_prime_dim=self.y_prime_grid_dim,
-        )
+        self.encoder_Yprime_coloc = Encoder_Yprime_ColocDirectNet()
+        self.encoder_Yprime_grid = Encoder_Yprime_GridDirectNet()
         self.inference = InferenceNet(x_dim, z_dim, y_dim, y_pos_dim, self.y_prime_dim, n_gene, nonLinear)
         self.generative = GenerativeNet(x_dim, z_dim, y_dim, y_pos_dim, self.y_prime_dim, n_gene, nonLinear)
         self.losses = LossFunctions()
@@ -386,10 +354,6 @@ class CVAE_EAD_newED(nn.Module):
         Y_pos_feature = self.encoder_Y(Y_pos)
         Y_prime_coloc_feature = self.encoder_Yprime_coloc(Y_prime_coloc)
         Y_prime_grid_feature = self.encoder_Yprime_grid(Y_prime_grid)
-        if Y_prime_grid_feature.dim() == 2 and Y_prime_coloc_feature.dim() == 3:
-            Y_prime_grid_feature = Y_prime_grid_feature.unsqueeze(1).repeat(
-                1, Y_prime_coloc_feature.shape[1], 1
-            )
         Y_prime_feature = torch.cat((Y_prime_coloc_feature, Y_prime_grid_feature), dim=2)
         # print(f"Y_pos_feature size: {Y_pos_feature.size()}")
         out_inf = self.inference(x, Y_pos_feature, Y_prime_feature, adj_A_t, temperature)

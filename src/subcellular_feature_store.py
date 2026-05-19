@@ -117,6 +117,6 @@ def load_precomputed_subcellular_features(feature_dir, cell_ids, gene_names):
 
     subcell_coloc = subcell_coloc[cell_indexer][:, gene_indexer][:, :, gene_indexer]
     subcell_grid = subcell_grid[cell_indexer][:, gene_indexer, :, :]
-    subcell_coloc = subcell_coloc.reshape(len(requested_cell_ids), -1).astype(np.float32, copy=False)
+    subcell_coloc = subcell_coloc.astype(np.float32, copy=False)
     subcell_grid = subcell_grid.astype(np.float32, copy=False)
     return subcell_coloc, subcell_grid, feature_dir

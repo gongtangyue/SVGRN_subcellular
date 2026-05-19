@@ -11,7 +11,8 @@ from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from torch.utils.data.dataset import TensorDataset
 
-from src.Con_Model_newED import CVAE_EAD_newED
+from src.Con_Model_newED import CVAE_EAD_newED as CVAE_EAD_newED_original
+from src.Con_Model_newED_direct import CVAE_EAD_newED as CVAE_EAD_newED_direct
 from src.subcellular_feature_store import (
     load_precomputed_subcellular_features,
     min_max_scale,
@@ -132,7 +133,7 @@ class SC_GRN_model:
             truth_edges,
             TF_mask,
             gene_name,
-            subcell_coloc_train.shape[1],
+            subcell_coloc_train.shape[-1],
             tuple(subcell_train.shape[1:]),
         )
 

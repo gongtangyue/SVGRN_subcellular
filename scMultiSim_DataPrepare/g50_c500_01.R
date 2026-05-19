@@ -86,3 +86,5 @@ for (x in 1:cell_num) {
 }
 
 print("cell_specific_grn saved")
+
+normalizePath("in_sim/g50_c05_n01")

@@ -65,10 +65,17 @@ def build_parser():
         help='Hidden channels used in the spatial CNN over the subcellular grid.',
     )
     parser.add_argument(
+        '--subcell_encoder_variant',
+        type=str,
+        choices=('original', 'direct'),
+        default='original',
+        help='Logged compatibility option; stage2 uses the encoder stored in the loaded stage1 model.',
+    )
+    parser.add_argument(
         '--y_prime_coloc_dim',
         type=int,
         default=64,
-        help='Output embedding dimension for the colocalization encoder.',
+        help='Output embedding dimension for the gene-specific colocalization encoder.',
     )
     parser.add_argument(
         '--y_prime_grid_dim',
