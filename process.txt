@@ -19,9 +19,6 @@ python gen_data_hub.py `
   --top-r 10 `
   --count-scale 20 `
   --m-candidates 40000 `
-  --p-reg 0.7 `
-  --p-basal 0.2 `
-  --p-noise 0.1 `
   --save-hub-meta
 
 
@@ -59,7 +56,6 @@ python .\main_stage1.py `
   --subcellular_feature_dir .\in_sim\g110_c05_n01\subcellular_features\subcellular_data_hub `
   --save_name .\runs\stage1\g110_c05_n01\hub `
   --GPU
-
 
 python .\main_stage2_allcell.py `
   --setting default `

@@ -22,3 +22,6 @@ in_sim/
 # OS files
 .DS_Store
 Thumbs.db
+# Large generated feature arrays
+job/data/subcellular_features/*.npy
+
