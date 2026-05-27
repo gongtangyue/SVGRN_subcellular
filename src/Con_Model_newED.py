@@ -293,20 +293,39 @@ class Encoder_Yprime_GridCNNNet(nn.Module):
         y_prime_dim=64,
     ):
         super().__init__()
-        self.gene_pool = nn.Conv2d(n_gene, gene_pool_channels, kernel_size=1, stride=1, padding=0)
-        self.net = nn.Sequential(
-            self.gene_pool,
-            nn.ReLU(inplace=True),
+        self.n_gene = n_gene
+        self.gene_mixer = nn.Sequential(
+            nn.Conv3d(
+                in_channels=1,
+                out_channels=gene_pool_channels,
+                kernel_size=(n_gene, 1, 1),
+                stride=1,
+                padding=0,
+            ),
+            nn.ReLU(inplace=False),
+        )
+        self.spatial_net = nn.Sequential(
+            nn.ReLU(inplace=False),
             nn.Conv2d(gene_pool_channels, cnn_hidden, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.Conv2d(cnn_hidden, cnn_hidden, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(inplace=True),
+            nn.ReLU(inplace=False),
             nn.AdaptiveAvgPool2d((1, 1)),
         )
         self.proj = nn.Linear(cnn_hidden, y_prime_dim)
 
     def forward(self, y_prime_grid):
-        feat = self.net(y_prime_grid)
+        if y_prime_grid.dim() != 4:
+            raise ValueError(
+                f"Expected y_prime_grid to be 4D [batch, genes, height, width], got shape {tuple(y_prime_grid.shape)}"
+            )
+        if y_prime_grid.size(1) != self.n_gene:
+            raise ValueError(
+                f"Expected y_prime_grid gene dimension to be {self.n_gene}, got {y_prime_grid.size(1)}"
+            )
+        feat = self.gene_mixer(y_prime_grid.unsqueeze(1))
+        feat = feat.squeeze(2)
+        feat = self.spatial_net(feat)
         feat = feat.flatten(1)
         return self.proj(feat)
 
@@ -353,7 +372,7 @@ class CVAE_EAD_newED(nn.Module):
         self.generative = GenerativeNet(x_dim, z_dim, y_dim, y_pos_dim, self.y_prime_dim, n_gene, nonLinear)
         self.losses = LossFunctions()
         for m in self.modules():
-            if type(m) == nn.Linear or type(m) == nn.Conv2d or type(m) == nn.ConvTranspose2d:
+            if isinstance(m, (nn.Linear, nn.Conv2d, nn.Conv3d, nn.ConvTranspose2d)):
                 torch.nn.init.xavier_normal_(m.weight)
                 if m.bias.data is not None:
                     init.constant_(m.bias, 0)
